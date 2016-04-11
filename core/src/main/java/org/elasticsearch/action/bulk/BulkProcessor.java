@@ -173,6 +173,7 @@ public class BulkProcessor implements Closeable {
 
     private final int bulkActions;
     private final long bulkSize;
+    private boolean asyncExec = false;
 
 
     private final ScheduledThreadPoolExecutor scheduler;
@@ -201,6 +202,11 @@ public class BulkProcessor implements Closeable {
             this.scheduler = null;
             this.scheduledFuture = null;
         }
+    }
+
+    BulkProcessor(Client client, BackoffPolicy backoffPolicy, Listener listener, @Nullable String name, int concurrentRequests, int bulkActions, ByteSizeValue bulkSize, @Nullable TimeValue flushInterval, boolean async) {
+        this(client, backoffPolicy, listener, name, concurrentRequests, bulkActions, bulkSize, flushInterval);
+        this.asyncExec = async;
     }
 
     /**
@@ -300,7 +306,14 @@ public class BulkProcessor implements Closeable {
         if (!isOverTheLimit()) {
             return;
         }
-        execute();
+
+        if (asyncExec) {
+            Flush flush = new Flush(); 
+            Thread execThread = new Thread(flush);
+            execThread.start();
+        } else {
+            execute();
+        }
     }
 
     // (currently) needs to be executed under a lock
@@ -331,7 +344,7 @@ public class BulkProcessor implements Closeable {
             execute();
         }
     }
-
+    
     class Flush implements Runnable {
 
         @Override
