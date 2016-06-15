@@ -82,6 +82,7 @@ public class BulkProcessor implements Closeable {
         private ByteSizeValue bulkSize = new ByteSizeValue(5, ByteSizeUnit.MB);
         private TimeValue flushInterval = null;
         private BackoffPolicy backoffPolicy = BackoffPolicy.exponentialBackoff();
+        private boolean asyncExec;
 
         /**
          * Creates a builder of bulk processor with the client to use and the listener that will be used
@@ -156,10 +157,18 @@ public class BulkProcessor implements Closeable {
         }
 
         /**
+         * Sets the way to flush the docs. If set to True, flush will be executed in a separate thread. Defaults to False.
+         */
+        public Builder setAsyncExec(boolean asyncExec) {
+            this.asyncExec = asyncExec;
+            return this;
+        }
+
+        /**
          * Builds a new bulk processor.
          */
         public BulkProcessor build() {
-            return new BulkProcessor(client, backoffPolicy, listener, name, concurrentRequests, bulkActions, bulkSize, flushInterval);
+            return new BulkProcessor(client, backoffPolicy, listener, name, concurrentRequests, bulkActions, bulkSize, flushInterval, asyncExec);
         }
     }
 
@@ -173,6 +182,7 @@ public class BulkProcessor implements Closeable {
 
     private final int bulkActions;
     private final long bulkSize;
+    private boolean asyncExec;
 
 
     private final ScheduledThreadPoolExecutor scheduler;
@@ -185,9 +195,10 @@ public class BulkProcessor implements Closeable {
 
     private volatile boolean closed = false;
 
-    BulkProcessor(Client client, BackoffPolicy backoffPolicy, Listener listener, @Nullable String name, int concurrentRequests, int bulkActions, ByteSizeValue bulkSize, @Nullable TimeValue flushInterval) {
+    BulkProcessor(Client client, BackoffPolicy backoffPolicy, Listener listener, @Nullable String name, int concurrentRequests, int bulkActions, ByteSizeValue bulkSize, @Nullable TimeValue flushInterval, boolean asyncExec) {
         this.bulkActions = bulkActions;
         this.bulkSize = bulkSize.bytes();
+        this.asyncExec = asyncExec;
 
         this.bulkRequest = new BulkRequest();
         this.bulkRequestHandler = (concurrentRequests == 0) ? BulkRequestHandler.syncHandler(client, backoffPolicy, listener) : BulkRequestHandler.asyncHandler(client, backoffPolicy, listener, concurrentRequests);
@@ -300,7 +311,14 @@ public class BulkProcessor implements Closeable {
         if (!isOverTheLimit()) {
             return;
         }
-        execute();
+
+        if (asyncExec) {
+            Flush flush = new Flush();
+            Thread execThread = new Thread(flush);
+            execThread.start();
+        } else {
+            execute();
+        }
     }
 
     // (currently) needs to be executed under a lock
